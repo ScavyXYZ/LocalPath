@@ -1,0 +1,10 @@
+.vs/
+.git/
+x64/
+*.slnx
+*.exe
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+LocalPath/boost/
+LocalPath/x64/

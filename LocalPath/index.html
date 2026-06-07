@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LocalPath</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg-base: #0b0d15; --bg-surface: #11131e; --bg-elevated: #181c2a;
+    --border-default: #262b3c; --border-light: #2e3444; --border-focus: #4b5563;
+    --text-primary: #eef2ff; --text-secondary: #9ca3c7; --text-muted: #6b728e;
+    --accent: #7c6ef0; --accent-hover: #5f4fcf; --accent-soft: rgba(124, 110, 240, 0.12);
+    --danger: #f4727c; --success: #4bc0a5; --radius-md: 16px; --radius-sm: 12px; --transition: 0.18s ease;
+  }
+  body { background: var(--bg-base); font-family: 'Inter', system-ui, sans-serif; color: var(--text-primary); line-height: 1.45; padding: 2rem 1rem 3rem; }
+  .container { max-width: 980px; margin: 0 auto; }
+
+  /* header */
+  .header { display: flex; align-items: baseline; justify-content: space-between; gap: 0.8rem; margin-bottom: 2rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border-default); }
+  .logo { font-size: 1.9rem; font-weight: 700; letter-spacing: -0.3px; background: linear-gradient(130deg, #ffffff, var(--accent)); -webkit-background-clip: text; color: transparent; }
+  .sub { font-size: 0.7rem; color: var(--text-muted); margin-top: 4px; }
+
+  /* global drop overlay */
+  .global-drop { position: fixed; inset: 0; background: rgba(11, 13, 21, 0.85); backdrop-filter: blur(5px); z-index: 999; display: none; align-items: center; justify-content: center; flex-direction: column; border: 4px dashed var(--accent); }
+  .global-drop.active { display: flex; }
+  .global-drop span { font-size: 4rem; margin-bottom: 1rem; }
+  .global-drop h2 { font-size: 1.5rem; color: var(--accent); }
+
+  /* upload card */
+  .upload-zone { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: 2rem 1.2rem; text-align: center; cursor: pointer; transition: all var(--transition); margin-bottom: 1.8rem; }
+  .upload-zone:hover, .upload-zone.over { border-color: var(--accent); background: var(--bg-elevated); transform: translateY(-1px); }
+  .upload-icon { font-size: 2.4rem; margin-bottom: 0.5rem; display: inline-block; }
+  .upload-zone strong { font-size: 1rem; font-weight: 500; }
+  .upload-zone p { font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.3rem; }
+  #file-input { display: none; }
+
+  /* Breadcrumbs bar */
+  .breadcrumbs { padding: 0.6rem 1rem; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-sm); margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; font-family: monospace; }
+  .breadcrumbs span.crumb { color: var(--accent); cursor: pointer; font-weight: 500; }
+  .breadcrumbs span.crumb:hover { text-decoration: underline; }
+  .breadcrumbs span.separator { color: var(--text-muted); }
+
+  /* search bar */
+  .controls-bar { display: flex; gap: 1rem; margin-bottom: 1rem; }
+  .search-input { flex: 1; background: var(--bg-surface); border: 1px solid var(--border-default); color: var(--text-primary); padding: 0.6rem 1rem; border-radius: var(--radius-sm); font-family: inherit; font-size: 0.85rem; outline: none; transition: border 0.2s; }
+  .search-input:focus { border-color: var(--accent); }
+
+  /* progress */
+  .progress-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: 0.6rem 1rem; margin-bottom: 1rem; display: none; }
+  .progress-bar-bg { height: 5px; background: var(--border-light); border-radius: 20px; overflow: hidden; }
+  .progress-fill { height: 100%; width: 0%; background: var(--accent); border-radius: 20px; transition: width 0.12s linear; }
+  .progress-label { font-size: 0.7rem; font-family: monospace; color: var(--text-muted); text-align: right; margin-top: 0.3rem; }
+
+  /* file list headers */
+  .file-header { display: flex; align-items: center; justify-content: space-between; margin: 1.6rem 0 0.9rem; flex-wrap: wrap; gap: 0.6rem; }
+  .title-badge { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; color: var(--text-secondary); }
+  .live-dot { width: 7px; height: 7px; background: #3bcf8e; border-radius: 50%; display: inline-block; box-shadow: 0 0 3px #3bcf8e; }
+  .action-buttons { display: flex; gap: 0.5rem; }
+  .refresh-btn { background: transparent; border: 1px solid var(--border-default); border-radius: 40px; padding: 0.3rem 0.8rem; font-size: 0.7rem; color: var(--text-secondary); cursor: pointer; transition: 0.15s; white-space: nowrap; }
+  .refresh-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+  .file-list { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); overflow: hidden; }
+
+  /* tables / clicks */
+  th[data-sort] { cursor: pointer; user-select: none; transition: 0.2s; }
+  th[data-sort]:hover { color: var(--text-primary); }
+  .sort-icon { font-size: 0.65rem; margin-left: 4px; color: var(--accent); }
+  .thumb { width: 36px; height: 36px; object-fit: cover; border-radius: 6px; background: var(--bg-elevated); border: 1px solid var(--border-light); }
+  .dir-click { cursor: pointer; color: var(--accent) !important; font-weight: 600 !important; }
+  .dir-click:hover { text-decoration: underline !important; }
+
+  @media (min-width: 640px) {
+    .file-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th { text-align: left; padding: 0.8rem 1rem; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted); background: rgba(12, 14, 22, 0.6); border-bottom: 1px solid var(--border-default); }
+    td { padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-default); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--bg-elevated); }
+    .td-icon { width: 50px; text-align: center; font-size: 1rem; font-weight: 500; letter-spacing: 0.5px; }
+    .td-name a, .td-name span { text-decoration: none; color: var(--text-primary); font-weight: 500; word-break: break-all; }
+    .td-name a:hover { color: var(--accent); text-decoration: underline; }
+    .td-size, .td-date { font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; }
+    .td-download a { background: transparent; border: 1px solid var(--border-light); border-radius: 30px; padding: 0.2rem 0.9rem; font-size: 0.7rem; text-decoration: none; color: var(--text-secondary); display: inline-block; transition: 0.15s; }
+    .td-download a:hover { background: var(--accent); border-color: var(--accent); color: white; }
+    .delete-btn { background: transparent; border: 1px solid var(--border-light); border-radius: 30px; width: 30px; height: 30px; cursor: pointer; color: var(--text-muted); transition: 0.15s; }
+    .delete-btn:hover { border-color: var(--danger); color: var(--danger); background: rgba(244, 114, 124, 0.1); }
+    .mobile-cards { display: none; }
+  }
+
+  @media (max-width: 639px) {
+    .file-table { display: none; }
+    .mobile-cards { display: flex; flex-direction: column; }
+    .file-card { display: flex; align-items: center; gap: 0.8rem; padding: 0.9rem 1rem; border-bottom: 1px solid var(--border-default); }
+    .card-icon { font-size: 1.2rem; font-weight: 500; flex-shrink: 0; min-width: 36px; text-align: center; }
+    .card-info { flex: 1; min-width: 0; }
+    .card-name { font-weight: 500; font-size: 0.85rem; word-break: break-word; }
+    .card-meta { font-size: 0.65rem; color: var(--text-muted); margin-top: 0.2rem; }
+    .card-actions { display: flex; gap: 0.6rem; flex-shrink: 0; }
+    .mobile-dl, .delete-btn { background: transparent; border: 1px solid var(--border-light); border-radius: 30px; padding: 0.25rem 0.8rem; font-size: 0.7rem; text-decoration: none; color: var(--text-secondary); }
+    .delete-btn { width: 30px; padding: 0; text-align: center; }
+  }
+
+  .empty-state { text-align: center; padding: 2.5rem 1rem; color: var(--text-muted); font-size: 0.85rem; }
+  .toast { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%) translateY(12px); background: #1f2436; color: #eef2ff; padding: 0.5rem 1.3rem; border-radius: 40px; font-size: 0.75rem; opacity: 0; transition: 0.2s; z-index: 200; border: 1px solid var(--border-light); }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<div class="global-drop" id="globalDrop">
+  <span>↓</span>
+  <h2>Drop files or folders here</h2>
+</div>
+
+<div class="container">
+  <div class="header">
+    <div>
+      <div class="logo">LocalPath</div>
+    </div>
+  </div>
+
+  <div class="upload-zone" id="dropzone">
+    <span class="upload-icon">↑</span>
+    <strong>Drop items or click to browse files</strong>
+    <p>shared across your local network</p>
+    <input type="file" id="fileInput" multiple>
+  </div>
+
+  <div class="progress-card" id="progressWrap">
+    <div class="progress-bar-bg"><div class="progress-fill" id="progressFill"></div></div>
+    <div class="progress-label" id="progressLabel">0%</div>
+  </div>
+
+  <div class="breadcrumbs" id="breadcrumbsBar"></div>
+
+  <div class="file-header">
+    <div class="title-badge"><span class="live-dot"></span> shared library</div>
+    <div class="action-buttons">
+      <button class="refresh-btn" id="downloadAllBtn">download all (.tar)</button>
+      <button class="refresh-btn" id="refreshBtn">↻ refresh</button>
+    </div>
+  </div>
+
+  <div class="controls-bar">
+    <input type="text" id="searchInput" class="search-input" placeholder="Search items by name...">
+  </div>
+
+  <div class="file-list">
+    <table class="file-table">
+      <thead>
+        <tr>
+          <th></th>
+          <th data-sort="name">name <span class="sort-icon" id="sort-name"></span></th>
+          <th data-sort="size">size <span class="sort-icon" id="sort-size"></span></th>
+          <th data-sort="date">date <span class="sort-icon" id="sort-date">▼</span></th>
+          <th></th><th></th>
+        </tr>
+      </thead>
+      <tbody id="fileTableBody"></tbody>
+    </table>
+    <div class="mobile-cards" id="mobileCards"></div>
+    <div id="emptyMessage" style="display: none;" class="empty-state">no items found</div>
+  </div>
+</div>
+
+<div class="toast" id="toastMsg"></div>
+
+<script>
+  (function() {
+    const dropzone = document.getElementById('dropzone');
+    const globalDrop = document.getElementById('globalDrop');
+    const fileInput = document.getElementById('fileInput');
+    const searchInput = document.getElementById('searchInput');
+    const progressWrap = document.getElementById('progressWrap');
+    const toast = document.getElementById('toastMsg');
+    
+    let currentFiles = [];
+    let sortCol = 'date';
+    let sortAsc = false;
+    let searchQuery = '';
+    let currentPath = ''; 
+
+    // Global Drag & Drop with folder structure scanning
+    let dragCounter = 0;
+    document.addEventListener('dragenter', e => { e.preventDefault(); dragCounter++; globalDrop.classList.add('active'); });
+    document.addEventListener('dragleave', e => { e.preventDefault(); dragCounter--; if (dragCounter === 0) globalDrop.classList.remove('active'); });
+    document.addEventListener('dragover', e => e.preventDefault());
+    document.addEventListener('drop', async e => {
+      e.preventDefault(); dragCounter = 0; globalDrop.classList.remove('active');
+      const items = e.dataTransfer.items;
+      if (!items) return;
+      
+      let filesToUpload = [];
+      async function traverse(entry, path = '') {
+        if (entry.isFile) {
+          const file = await new Promise(res => entry.file(res));
+          filesToUpload.push({ file, relPath: path + file.name });
+        } else if (entry.isDirectory) {
+          const reader = entry.createReader();
+          let entries = [];
+          const readAll = async () => {
+            let res = await new Promise(r => reader.readEntries(r));
+            if (res.length) { entries = entries.concat(res); await readAll(); }
+          };
+          await readAll();
+          for (const child of entries) await traverse(child, path + entry.name + '/');
+        }
+      }
+      for (const item of items) {
+        if (item.kind === 'file') { const entry = item.webkitGetAsEntry(); if (entry) await traverse(entry); }
+      }
+      if (filesToUpload.length) {
+        progressWrap.style.display = 'block';
+        for (const item of filesToUpload) await uploadOne(item.file, item.relPath);
+        progressWrap.style.display = 'none';
+        pollFiles(true);
+      }
+    });
+
+    dropzone.addEventListener('click', () => fileInput.click());
+    
+    fileInput.addEventListener('change', async () => {
+      if (fileInput.files.length) {
+        progressWrap.style.display = 'block';
+        for (const f of fileInput.files) await uploadOne(f, f.name);
+        progressWrap.style.display = 'none'; pollFiles(true);
+      }
+      fileInput.value = '';
+    });
+
+    document.getElementById('refreshBtn').addEventListener('click', () => pollFiles(true));
+    document.getElementById('downloadAllBtn').addEventListener('click', () => {
+      window.open('/archive?path=' + encodeURIComponent(currentPath));
+    });
+    searchInput.addEventListener('input', e => { searchQuery = e.target.value.toLowerCase(); renderFileList(); });
+
+    // Sorting
+    document.querySelectorAll('th[data-sort]').forEach(th => {
+      th.addEventListener('click', () => {
+        const col = th.dataset.sort;
+        if (sortCol === col) sortAsc = !sortAsc;
+        else { sortCol = col; sortAsc = col === 'name'; }
+        document.querySelectorAll('.sort-icon').forEach(el => el.textContent = '');
+        document.getElementById(`sort-${col}`).textContent = sortAsc ? '▲' : '▼';
+        renderFileList();
+      });
+    });
+
+    function showMessage(text, isErr=false) {
+      toast.textContent = text; toast.style.background = isErr ? '#882e3a' : '#202436';
+      toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2800);
+    }
+
+    function uploadOne(file, relativePath) {
+      return new Promise((resolve) => {
+        const xhr = new XMLHttpRequest(); const fd = new FormData();
+        fd.append('file', file, relativePath);
+        xhr.open('POST', '/upload?path=' + encodeURIComponent(currentPath));
+        xhr.upload.onprogress = e => {
+          if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 100);
+            document.getElementById('progressFill').style.width = pct + '%';
+            document.getElementById('progressLabel').textContent = pct + '% · ' + file.name;
+          }
+        };
+        xhr.onload = () => {
+          document.getElementById('progressFill').style.width = '0%';
+          if (xhr.status !== 200) showMessage('failed: ' + file.name, true);
+          resolve();
+        };
+        xhr.onerror = () => { showMessage('network error', true); resolve(); };
+        xhr.send(fd);
+      });
+    }
+
+    let lastHash = '';
+    async function pollFiles(force = false) {
+      try {
+        const resp = await fetch('/api/files?path=' + encodeURIComponent(currentPath)); if (!resp.ok) return;
+        const files = await resp.json();
+        const hash = files.map(f => `${f.name}|${f.size}`).join('::');
+        if (!force && hash === lastHash) return;
+        lastHash = hash; currentFiles = files; 
+        renderBreadcrumbs(); renderFileList();
+      } catch (err) {}
+    }
+
+    window.goToPath = function(path) { currentPath = path; pollFiles(true); };
+    window.enterDir = function(name) { currentPath = currentPath ? currentPath + '/' + name : name; pollFiles(true); };
+
+    function renderBreadcrumbs() {
+      const bar = document.getElementById('breadcrumbsBar');
+      let html = `<span class="crumb" onclick="goToPath('')">root</span>`;
+      if (currentPath) {
+        const parts = currentPath.split('/'); let acc = '';
+        parts.forEach((p, idx) => {
+          acc += (idx === 0 ? '' : '/') + p;
+          html += ` <span class="separator">/</span> <span class="crumb" onclick="goToPath('${acc}')">${escapeHtml(p)}</span>`;
+        });
+      }
+      bar.innerHTML = html;
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return str.replace(/[&<>]/g, function(m) {
+        if (m === '&') return '&amp;';
+        if (m === '<') return '&lt;';
+        if (m === '>') return '&gt;';
+        return m;
+      });
+    }
+
+    function getTypeIcon(file) {
+      if (file.is_dir) return 'DIR';
+      const name = file.name; const ext = name.slice(name.lastIndexOf('.')).toLowerCase();
+      if (['.png','.jpg','.jpeg','.gif','.webp'].includes(ext)) return 'img';
+      if (['.mp4','.mov','.avi','.mkv'].includes(ext)) return 'VID';
+      if (['.mp3','.wav','.flac','.ogg'].includes(ext)) return 'AUD';
+      if (ext === '.pdf') return 'PDF';
+      if (['.zip','.rar','.7z','.tar','.gz'].includes(ext)) return 'ARC';
+      return 'FILE';
+    }
+
+    function getIconHtml(file) {
+      if (file.is_dir) return '<span style="opacity:0.9;">DIR</span>';
+      const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
+      const fullPath = (currentPath ? currentPath + '/' : '') + file.name;
+      if (['.png','.jpg','.jpeg','.gif','.webp'].includes(ext)) {
+        return `<img src="/download?file=${encodeURIComponent(fullPath)}" class="thumb" loading="lazy" alt="preview">`;
+      }
+      const type = getTypeIcon(file);
+      let label = '';
+      if (type === 'VID') label = 'VID';
+      else if (type === 'AUD') label = 'AUD';
+      else if (type === 'PDF') label = 'PDF';
+      else if (type === 'ARC') label = 'ARC';
+      else label = 'FILE';
+      return `<span style="font-size:0.9rem; font-weight:500;">${label}</span>`;
+    }
+
+    function renderFileList() {
+      let files = [...currentFiles];
+      if (searchQuery) files = files.filter(f => f.name.toLowerCase().includes(searchQuery));
+      
+      files.sort((a, b) => {
+        if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+        let vA = a[sortCol], vB = b[sortCol];
+        if (sortCol === 'name') { vA = vA.toLowerCase(); vB = vB.toLowerCase(); }
+        if (vA < vB) return sortAsc ? -1 : 1;
+        if (vA > vB) return sortAsc ? 1 : -1;
+        return 0;
+      });
+
+      const tbody = document.getElementById('fileTableBody');
+      const cardsDiv = document.getElementById('mobileCards');
+      const emptyDiv = document.getElementById('emptyMessage');
+
+      if (!files.length) { tbody.innerHTML = ''; cardsDiv.innerHTML = ''; emptyDiv.style.display = 'block'; return; }
+      emptyDiv.style.display = 'none';
+
+      tbody.innerHTML = files.map(f => {
+        const fullPath = (currentPath ? currentPath + '/' : '') + f.name;
+        const encPath = encodeURIComponent(fullPath);
+        const safeName = escapeHtml(f.name);
+        
+        const nameLink = f.is_dir 
+          ? `<span class="dir-click" onclick="enterDir('${escapeHtml(f.name).replace(/'/g, "\\'")}')">${safeName}</span>`
+          : `<a href="/download?file=${encPath}" target="_blank">${safeName}</a>`;
+          
+        const actionBtn = f.is_dir
+          ? `<a href="/archive?path=${encPath}" download>↓ tar</a>`
+          : `<a href="/download?file=${encPath}" download>↓ get</a>`;
+
+        const iconContent = f.is_dir ? 'DIR' : (() => {
+          const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase();
+          if (['.png','.jpg','.jpeg','.gif','.webp'].includes(ext)) return '';
+          const t = getTypeIcon(f);
+          if (t === 'VID') return 'VID';
+          if (t === 'AUD') return 'AUD';
+          if (t === 'PDF') return 'PDF';
+          if (t === 'ARC') return 'ARC';
+          return 'FILE';
+        })();
+
+        return `<tr>
+          <td class="td-icon">${f.is_dir ? 'DIR' : (iconContent !== '' ? iconContent : getIconHtml(f))}</td>
+          <td class="td-name">${nameLink}</td>
+          <td class="td-size">${f.size_human}</td>
+          <td class="td-date">${f.date}</td>
+          <td class="td-download">${actionBtn}</td>
+          <td><form method="post" action="/delete" style="display:inline" onsubmit="return confirm('Delete?')">
+            <input type="hidden" name="file" value="${escapeHtml(fullPath)}"><button class="delete-btn" type="submit">X</button>
+          </form></td>
+        </tr>`;
+      }).join('');
+
+      cardsDiv.innerHTML = files.map(f => {
+        const fullPath = (currentPath ? currentPath + '/' : '') + f.name;
+        const encPath = encodeURIComponent(fullPath);
+        const safeName = escapeHtml(f.name);
+        
+        const nameLink = f.is_dir 
+          ? `<span class="dir-click" onclick="enterDir('${escapeHtml(f.name).replace(/'/g, "\\'")}')">${safeName}</span>`
+          : `<span>${safeName}</span>`;
+
+        const actionBtn = f.is_dir
+          ? `<a class="mobile-dl" href="/archive?path=${encPath}" download>tar</a>`
+          : `<a class="mobile-dl" href="/download?file=${encPath}" download>get</a>`;
+        
+        let cardIconText = f.is_dir ? 'DIR' : (() => {
+          const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase();
+          if (['.png','.jpg','.jpeg','.gif','.webp'].includes(ext)) return 'IMG';
+          const t = getTypeIcon(f);
+          if (t === 'VID') return 'VID';
+          if (t === 'AUD') return 'AUD';
+          if (t === 'PDF') return 'PDF';
+          if (t === 'ARC') return 'ARC';
+          return 'FILE';
+        })();
+
+        if (!f.is_dir && (f.name.slice(f.name.lastIndexOf('.')).toLowerCase() === '.png' || 
+            f.name.slice(f.name.lastIndexOf('.')).toLowerCase() === '.jpg' ||
+            f.name.slice(f.name.lastIndexOf('.')).toLowerCase() === '.jpeg' ||
+            f.name.slice(f.name.lastIndexOf('.')).toLowerCase() === '.gif' ||
+            f.name.slice(f.name.lastIndexOf('.')).toLowerCase() === '.webp')) {
+          cardIconText = 'IMG';
+        }
+
+        return `<div class="file-card">
+          <div class="card-icon">${cardIconText}</div>
+          <div class="card-info"><div class="card-name">${nameLink}</div><div class="card-meta">${f.size_human} · ${f.date}</div></div>
+          <div class="card-actions">${actionBtn}
+          <form method="post" action="/delete" onsubmit="return confirm('Delete?')" style="display:inline">
+            <input type="hidden" name="file" value="${escapeHtml(fullPath)}"><button class="delete-btn" type="submit">X</button>
+          </form></div>
+        </div>`;
+      }).join('');
+    }
+
+    pollFiles(); 
+    setInterval(pollFiles, 3200);
+  })();
+</script>
+</body>
+</html>
