@@ -6,5 +6,6 @@ x64/
 *.vcxproj
 *.vcxproj.filters
 *.vcxproj.user
+*.zip
 LocalPath/boost/
 LocalPath/x64/

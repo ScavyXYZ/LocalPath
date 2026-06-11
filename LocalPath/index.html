@@ -95,7 +95,7 @@
     .card-info { flex: 1; min-width: 0; }
     .card-name { font-weight: 500; font-size: 0.85rem; word-break: break-word; }
     .card-meta { font-size: 0.65rem; color: var(--text-muted); margin-top: 0.2rem; }
-    .card-actions { display: flex; gap: 0.6rem; flex-shrink: 0; }
+    .card-actions { display: flex; gap: 0.6rem; flex-shrink: 0; align-items: center; }
     .mobile-dl, .delete-btn { background: transparent; border: 1px solid var(--border-light); border-radius: 30px; padding: 0.25rem 0.8rem; font-size: 0.7rem; text-decoration: none; color: var(--text-secondary); }
     .delete-btn { width: 30px; padding: 0; text-align: center; }
   }
@@ -103,6 +103,27 @@
   .empty-state { text-align: center; padding: 2.5rem 1rem; color: var(--text-muted); font-size: 0.85rem; }
   .toast { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%) translateY(12px); background: #1f2436; color: #eef2ff; padding: 0.5rem 1.3rem; border-radius: 40px; font-size: 0.75rem; opacity: 0; transition: 0.2s; z-index: 200; border: 1px solid var(--border-light); }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* Modals share design */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(11,13,21,0.75); backdrop-filter: blur(4px); z-index: 500; display: none; align-items: center; justify-content: center; padding: 1rem; }
+  .modal-overlay.active { display: flex; }
+  .modal { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: 1.5rem; width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 1rem; }
+  .modal-header { display: flex; align-items: center; justify-content: space-between; }
+  .modal-title { font-size: 0.95rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 1rem; }
+  .modal-close { background: transparent; border: none; color: var(--text-muted); font-size: 1.1rem; cursor: pointer; line-height: 1; padding: 0.2rem 0.4rem; border-radius: 6px; transition: 0.15s; }
+  .modal-close:hover { color: var(--text-primary); background: var(--bg-elevated); }
+  .modal-field { display: flex; flex-direction: column; gap: 0.4rem; }
+  .modal-label { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted); }
+  .modal-input { background: var(--bg-elevated); border: 1px solid var(--border-default); color: var(--text-primary); padding: 0.55rem 0.9rem; border-radius: var(--radius-sm); font-family: inherit; font-size: 0.85rem; outline: none; transition: border 0.2s; }
+  .modal-input:focus { border-color: var(--accent); }
+  .modal-textarea { background: var(--bg-elevated); border: 1px solid var(--border-default); color: var(--text-primary); padding: 0.7rem 0.9rem; border-radius: var(--radius-sm); font-family: 'Fira Code', 'Consolas', monospace; font-size: 0.82rem; outline: none; transition: border 0.2s; resize: vertical; min-height: 180px; line-height: 1.55; }
+  .modal-textarea:focus { border-color: var(--accent); }
+  .modal-footer { display: flex; justify-content: flex-end; gap: 0.6rem; }
+  .btn-cancel { background: transparent; border: 1px solid var(--border-default); color: var(--text-secondary); padding: 0.45rem 1.1rem; border-radius: 40px; font-size: 0.78rem; cursor: pointer; transition: 0.15s; }
+  .btn-cancel:hover { border-color: var(--border-focus); color: var(--text-primary); }
+  .btn-create { background: var(--accent); border: 1px solid var(--accent); color: #fff; padding: 0.45rem 1.2rem; border-radius: 40px; font-size: 0.78rem; font-weight: 600; cursor: pointer; transition: 0.15s; }
+  .btn-create:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .btn-create:disabled { opacity: 0.45; cursor: not-allowed; }
 </style>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
@@ -137,6 +158,7 @@
   <div class="file-header">
     <div class="title-badge"><span class="live-dot"></span> shared library</div>
     <div class="action-buttons">
+      <button class="refresh-btn" id="newFileBtn" style="border-color: var(--accent); color: var(--accent);">+ new file</button>
       <button class="refresh-btn" id="downloadAllBtn">download all (.tar)</button>
       <button class="refresh-btn" id="refreshBtn">↻ refresh</button>
     </div>
@@ -161,6 +183,41 @@
     </table>
     <div class="mobile-cards" id="mobileCards"></div>
     <div id="emptyMessage" style="display: none;" class="empty-state">no items found</div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="newFileModal">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">Create new file</span>
+      <button class="modal-close" id="modalCloseBtn">✕</button>
+    </div>
+    <div class="modal-field">
+      <label class="modal-label" for="newFileName">File name</label>
+      <input type="text" id="newFileName" class="modal-input" placeholder="e.g. notes.txt, script.py, data.json" spellcheck="false" autocomplete="off">
+    </div>
+    <div class="modal-field">
+      <label class="modal-label" for="newFileContent">Content <span style="font-weight:400;text-transform:none;font-size:0.7rem;">(optional)</span></label>
+      <textarea id="newFileContent" class="modal-textarea" placeholder="Start typing…"></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" id="modalCancelBtn">Cancel</button>
+      <button class="btn-create" id="modalCreateBtn">Create file</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="viewFileModal">
+  <div class="modal" style="max-width: 860px; height: 80vh;">
+    <div class="modal-header">
+      <span class="modal-title" id="viewFileTitle">File Preview</span>
+      <button class="modal-close" id="viewModalCloseBtn">✕</button>
+    </div>
+    <div id="viewFileContentContainer" style="flex: 1; overflow: auto; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: 1rem;">
+      </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" id="viewModalCloseBtn2">Close</button>
+    </div>
   </div>
 </div>
 
@@ -230,6 +287,120 @@
     });
 
     document.getElementById('refreshBtn').addEventListener('click', () => pollFiles(true));
+
+    // ── New File Modal ───────────────────────────────────────────────
+    const newFileModal   = document.getElementById('newFileModal');
+    const newFileName    = document.getElementById('newFileName');
+    const newFileContent = document.getElementById('newFileContent');
+    const modalCreateBtn = document.getElementById('modalCreateBtn');
+
+    function openNewFileModal() {
+      newFileName.value = '';
+      newFileContent.value = '';
+      modalCreateBtn.disabled = false;
+      newFileModal.classList.add('active');
+      setTimeout(() => newFileName.focus(), 80);
+    }
+
+    function closeNewFileModal() {
+      newFileModal.classList.remove('active');
+    }
+
+    document.getElementById('newFileBtn').addEventListener('click', openNewFileModal);
+    document.getElementById('modalCloseBtn').addEventListener('click', closeNewFileModal);
+    document.getElementById('modalCancelBtn').addEventListener('click', closeNewFileModal);
+    newFileModal.addEventListener('click', e => { if (e.target === newFileModal) closeNewFileModal(); });
+
+    // ── View File Modal Logic ─────────────────────────────────────────
+    const viewFileModal = document.getElementById('viewFileModal');
+    const viewFileContentContainer = document.getElementById('viewFileContentContainer');
+
+    window.viewFile = async function(encPath) {
+      const fileName = decodeURIComponent(encPath).split('/').pop();
+      document.getElementById('viewFileTitle').textContent = fileName;
+      viewFileContentContainer.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 2rem;">Loading preview...</div>';
+      viewFileModal.classList.add('active');
+
+      const ext = fileName.slice(fileName.lastIndexOf('.')).toLowerCase();
+      const fileUrl = '/download?file=' + encPath;
+
+      if (['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) {
+        viewFileContentContainer.innerHTML = `<div style="display:flex; justify-content:center; align-items:center; height:100%;"><img src="${fileUrl}" style="max-width:100%; max-height:100%; object-fit:contain; border-radius:4px;"></div>`;
+      } else if (['.mp4', '.webm'].includes(ext)) {
+        viewFileContentContainer.innerHTML = `<div style="display:flex; justify-content:center; align-items:center; height:100%;"><video src="${fileUrl}" controls style="max-width:100%; max-height:100%; outline:none;"></video></div>`;
+      } else if (['.mp3', '.wav', '.ogg'].includes(ext)) {
+        viewFileContentContainer.innerHTML = `<div style="display:flex; justify-content:center; align-items:center; height:100%;"><audio src="${fileUrl}" controls style="width:100%;"></audio></div>`;
+      } else if (ext === '.pdf') {
+        viewFileContentContainer.innerHTML = `<iframe src="${fileUrl}" style="width:100%; height:100%; border:none; background:white; border-radius:4px;"></iframe>`;
+      } else if (['.txt', '.html', '.css', '.js', '.json', '.py', '.cpp', '.h', '.sh', '.md', '.xml', '.ini', '.cfg', '.log'].includes(ext) || !ext) {
+        try {
+          const res = await fetch(fileUrl);
+          if (!res.ok) throw new Error();
+          const text = await res.text();
+          const pre = document.createElement('pre');
+          pre.style.whiteSpace = 'pre-wrap';
+          pre.style.wordBreak = 'break-all';
+          pre.style.fontFamily = "'Fira Code', 'Consolas', monospace";
+          pre.style.fontSize = '0.85rem';
+          pre.style.color = 'var(--text-primary)';
+          pre.textContent = text;
+          viewFileContentContainer.innerHTML = '';
+          viewFileContentContainer.appendChild(pre);
+        } catch (err) {
+          viewFileContentContainer.innerHTML = '<div style="color: var(--danger); text-align: center; padding: 2rem;">Failed to load file text.</div>';
+        }
+      } else {
+        viewFileContentContainer.innerHTML = `<div style="color: var(--text-muted); text-align: center; padding: 2rem;">
+          Preview not supported for this file type.<br><br>
+          <a href="${fileUrl}" download style="color: var(--accent); text-decoration: underline;">Download file instead</a>
+        </div>`;
+      }
+    };
+
+    function closeViewModal() {
+      viewFileContentContainer.innerHTML = ''; // reset content to stop playing audio/video
+      viewFileModal.classList.remove('active');
+    }
+
+    document.getElementById('viewModalCloseBtn').addEventListener('click', closeViewModal);
+    document.getElementById('viewModalCloseBtn2').addEventListener('click', closeViewModal);
+    viewFileModal.addEventListener('click', e => { if (e.target === viewFileModal) closeViewModal(); });
+
+    // Close Modals on Escape
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        if (newFileModal.classList.contains('active')) closeNewFileModal();
+        if (viewFileModal.classList.contains('active')) closeViewModal();
+      }
+    });
+
+    // Ctrl+Enter to confirm
+    newFileContent.addEventListener('keydown', e => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') modalCreateBtn.click();
+    });
+
+    modalCreateBtn.addEventListener('click', async () => {
+      const name = newFileName.value.trim();
+      if (!name) { newFileName.focus(); newFileName.style.borderColor = 'var(--danger)'; setTimeout(() => newFileName.style.borderColor = '', 1200); return; }
+
+      modalCreateBtn.disabled = true;
+      modalCreateBtn.textContent = 'Creating…';
+
+      try {
+        const blob = new Blob([newFileContent.value], { type: 'text/plain' });
+        const file = new File([blob], name);
+        const relPath = (currentPath ? currentPath + '/' : '') + name;
+        await uploadOne(file, relPath);
+        showMessage('✓ ' + name + ' created');
+        closeNewFileModal();
+        pollFiles(true);
+      } catch (err) {
+        showMessage('failed to create file', true);
+        modalCreateBtn.disabled = false;
+        modalCreateBtn.textContent = 'Create file';
+      }
+    });
+    // ────────────────────────────────────────────────────────────────
     document.getElementById('downloadAllBtn').addEventListener('click', () => {
       window.open('/archive?path=' + encodeURIComponent(currentPath));
     });
@@ -369,9 +540,13 @@
           ? `<span class="dir-click" onclick="enterDir('${escapeHtml(f.name).replace(/'/g, "\\'")}')">${safeName}</span>`
           : `<a href="/download?file=${encPath}" target="_blank">${safeName}</a>`;
           
+        const viewBtn = f.is_dir 
+          ? '' 
+          : `<a href="#" onclick="event.preventDefault(); viewFile('${encPath}')" style="margin-right: 0.5rem;">👁 view</a>`;
+
         const actionBtn = f.is_dir
           ? `<a href="/archive?path=${encPath}" download>↓ tar</a>`
-          : `<a href="/download?file=${encPath}" download>↓ get</a>`;
+          : `${viewBtn}<a href="/download?file=${encPath}" download>↓ get</a>`;
 
         const iconContent = f.is_dir ? 'DIR' : (() => {
           const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase();
@@ -405,9 +580,13 @@
           ? `<span class="dir-click" onclick="enterDir('${escapeHtml(f.name).replace(/'/g, "\\'")}')">${safeName}</span>`
           : `<span>${safeName}</span>`;
 
+        const mobileViewBtn = f.is_dir 
+          ? '' 
+          : `<a class="mobile-dl" href="#" onclick="event.preventDefault(); viewFile('${encPath}')" style="margin-right: 0.3rem;">view</a>`;
+
         const actionBtn = f.is_dir
           ? `<a class="mobile-dl" href="/archive?path=${encPath}" download>tar</a>`
-          : `<a class="mobile-dl" href="/download?file=${encPath}" download>get</a>`;
+          : `${mobileViewBtn}<a class="mobile-dl" href="/download?file=${encPath}" download>get</a>`;
         
         let cardIconText = f.is_dir ? 'DIR' : (() => {
           const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase();
