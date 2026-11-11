@@ -9,3 +9,4 @@ x64/
 *.zip
 LocalPath/boost/
 LocalPath/x64/
+build/
