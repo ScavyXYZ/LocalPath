@@ -285,7 +285,9 @@ static void show_access_panel(const std::string& network_url, const std::string&
         ansi = true; columns = info.ws_col; rows = info.ws_row;
     }
 #endif
-    auto qr = qrcodegen::QrCode::encodeText(network_url.c_str(), qrcodegen::QrCode::Ecc::LOW);
+    // Medium error correction is more reliable for phone cameras and OpenCV,
+    // especially because the random token can produce visually dense patterns.
+    auto qr = qrcodegen::QrCode::encodeText(network_url.c_str(), qrcodegen::QrCode::Ecc::MEDIUM);
     constexpr int border = 4;
     const int size = qr.getSize() + border * 2;
     std::ostringstream panel;
