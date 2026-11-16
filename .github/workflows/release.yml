@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $folder = "LocalPath-${{ github.ref_name }}-windows-x64"
+          New-Item -ItemType Directory -Path $folder
+          Copy-Item "build/Release/LocalPath.exe" "$folder/LocalPath.exe"
+          Copy-Item "LocalPath/index.html", "README.md", "LICENSE" $folder
+          Compress-Archive -Path $folder -DestinationPath "$folder.zip"
+
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          folder="LocalPath-${GITHUB_REF_NAME}-linux-x64"
+          mkdir "$folder"
+          cp build/LocalPath LocalPath/index.html README.md LICENSE "$folder/"
+          tar -czf "$folder.tar.gz" "$folder"
+
+      - name: Upload Windows package
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: LocalPath-${{ github.ref_name }}-windows-x64.zip
+          if-no-files-found: error
+
+      - name: Upload Linux package
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: LocalPath-${{ github.ref_name }}-linux-x64.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create checksums
+        run: sha256sum dist/* > dist/SHA256SUMS.txt
+
+      - name: Write release notes
+        shell: bash
+        run: |
+          cat > release-notes.md <<EOF
+          ## LocalPath ${GITHUB_REF_NAME}
+
+          ### Highlights
+          - Secure token sessions and manual connection approval.
+          - The server remains reachable while unauthenticated users wait for approval; files stay protected.
+          - Reliable physical LAN IP detection that ignores common VPN and virtual adapters.
+          - Redesigned responsive file browser for desktop and mobile.
+          - Original download names, including Unicode filenames on Windows.
+          - Streamed uploads, downloads, and folder archives.
+
+          ### Downloads
+          - **Windows:** \`LocalPath-${GITHUB_REF_NAME}-windows-x64.zip\`
+          - **Linux:** \`LocalPath-${GITHUB_REF_NAME}-linux-x64.tar.gz\`
+
+          Extract the package and run \`LocalPath.exe\` on Windows or \`./LocalPath\` on Linux.
+          Keep \`index.html\` next to the executable.
+
+          > LocalPath uses unencrypted HTTP and is intended for trusted local networks only.
+          EOF
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${GITHUB_REF_NAME}"
+          dist/*
+          --repo "${GITHUB_REPOSITORY}"
+          --title "${GITHUB_REF_NAME}"
+          --notes-file release-notes.md
+          --verify-tag
