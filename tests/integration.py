@@ -79,14 +79,33 @@ class ServerTests(unittest.TestCase):
         connection.close()
         return status, data
 
+    def request_with_headers(self, method, path, authenticated=True):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=15)
+        headers = {"Cookie": self.cookie} if authenticated else {}
+        connection.request(method, path, headers=headers)
+        response = connection.getresponse()
+        status, response_headers, data = response.status, dict(response.getheaders()), response.read()
+        connection.close()
+        return status, response_headers, data
+
     def test_access_requires_token(self):
         protected = self.uploads / "protected.txt"
         protected.write_text("keep", encoding="utf-8")
-        for path in ("/", "/index.html", "/api/files?path=", "/download?file=empty.txt", "/archive?path="):
+        # The public entry page stays reachable and shows only an approval screen.
+        for path in ("/", "/index.html", "/?token=wrong"):
+            status, data = self.request("GET", path, authenticated=False)
+            self.assertEqual(status, 200)
+            self.assertIn("/api/auth/status", data.decode("utf-8", errors="replace"))
+            self.assertNotIn(b"protected.txt", data)
+        status, data = self.request("GET", "/api/auth/status", authenticated=False)
+        self.assertEqual(status, 200)
+        self.assertIn(json.loads(data)["status"], {"pending", "denied"})
+
+        # File metadata and every file-changing/reading endpoint remain protected.
+        for path in ("/api/files?path=", "/download?file=empty.txt", "/archive?path="):
             self.assertEqual(self.request("GET", path, authenticated=False)[0], 401)
-        self.assertEqual(self.request("GET", "/?token=wrong", authenticated=False)[0], 401)
         self.assertEqual(self.request("GET", "/api/files?path=&token=" + self.token, authenticated=False)[0], 401)
-        self.assertEqual(self.request("GET", "/", headers={"Cookie": "LocalPathSession=wrong"}, authenticated=False)[0], 401)
+        self.assertEqual(self.request("GET", "/", headers={"Cookie": "LocalPathSession=wrong"}, authenticated=False)[0], 200)
         self.assertEqual(self.request("POST", "/delete", "file=protected.txt", authenticated=False)[0], 401)
         self.assertEqual(self.request("POST", "/upload?path=", b"data", authenticated=False)[0], 401)
         self.assertEqual(protected.read_text(encoding="utf-8"), "keep")
@@ -142,6 +161,17 @@ class ServerTests(unittest.TestCase):
         self.assertIn("apostrophe's.txt", names)
         if os.name != "nt":
             self.assertIn("line\nbreak.txt", names)
+
+    def test_download_keeps_original_filename(self):
+        name = "звіт 2026.txt"
+        content = b"report"
+        (self.uploads / name).write_bytes(content)
+        status, headers, data = self.request_with_headers(
+            "GET", "/download?file=" + quote(name))
+        self.assertEqual((status, data), (200, content))
+        disposition = headers["Content-Disposition"]
+        self.assertIn("filename*=UTF-8''", disposition)
+        self.assertIn(quote(name, safe="!#$&+-.^_`|~"), disposition)
 
     def test_traversal_and_root_delete(self):
         outside = self.root / "outside.txt"

@@ -19,6 +19,9 @@
 #include <array>
 #include <optional>
 #include <atomic>
+#include <cctype>
+#include <cwctype>
+#include <limits>
 #include <stdexcept>
 #include <csignal>
 #include <cstdlib>
@@ -32,10 +35,13 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <io.h>
 #include <bcrypt.h>
+#include <iphlpapi.h>
 #ifdef _MSC_VER
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "bcrypt.lib")
+#pragma comment(lib, "iphlpapi.lib")
 #endif
 typedef int socklen_t;
 #else
@@ -44,6 +50,8 @@ typedef int socklen_t;
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 
 typedef int SOCKET;
 #define INVALID_SOCKET -1
@@ -71,46 +79,116 @@ static std::string read_file(const std::string& path) {
     return ss.str();
 }
 
-std::string get_local_ip() {
-    std::string local_ip = "127.0.0.1";
+static bool is_usable_lan_ip(uint32_t address) {
+    const uint32_t host = ntohl(address);
+    if ((host >> 24) == 127 || (host & 0xffff0000U) == 0xa9fe0000U || host == 0) return false;
+    return (host & 0xff000000U) == 0x0a000000U ||
+           (host & 0xfff00000U) == 0xac100000U ||
+           (host & 0xffff0000U) == 0xc0a80000U;
+}
 
+std::string get_local_ip() {
 #ifdef _WIN32
     WSADATA wsaData;
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        return local_ip;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) return "127.0.0.1";
+    ULONG size = 16 * 1024;
+    std::vector<unsigned char> storage(size);
+    auto* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(storage.data());
+    ULONG result = GetAdaptersAddresses(AF_INET,
+        GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+        nullptr, adapters, &size);
+    if (result == ERROR_BUFFER_OVERFLOW) {
+        storage.resize(size);
+        adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(storage.data());
+        result = GetAdaptersAddresses(AF_INET,
+            GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+            nullptr, adapters, &size);
     }
-#endif
-    SOCKET sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock == INVALID_SOCKET) {
-#ifdef _WIN32
-        WSACleanup();
-#endif
-        return local_ip;
-    }
-
-    sockaddr_in remote_addr;
-    std::memset(&remote_addr, 0, sizeof(remote_addr));
-    remote_addr.sin_family = AF_INET;
-    remote_addr.sin_addr.s_addr = inet_addr("8.8.8.8");
-    remote_addr.sin_port = htons(53);
-
-    if (connect(sock, reinterpret_cast<sockaddr*>(&remote_addr), sizeof(remote_addr)) != SOCKET_ERROR) {
-        sockaddr_in local_addr;
-        socklen_t addr_len = sizeof(local_addr);
-
-        if (getsockname(sock, reinterpret_cast<sockaddr*>(&local_addr), &addr_len) == 0) {
-            char buffer[INET_ADDRSTRLEN];
-            if (inet_ntop(AF_INET, &(local_addr.sin_addr), buffer, INET_ADDRSTRLEN) != nullptr) {
-                local_ip = buffer;
+    std::string best;
+    uint64_t best_score = std::numeric_limits<uint64_t>::max();
+    if (result == NO_ERROR) {
+        for (auto* adapter = adapters; adapter; adapter = adapter->Next) {
+            if (adapter->OperStatus != IfOperStatusUp ||
+                adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK ||
+                adapter->IfType == IF_TYPE_TUNNEL) continue;
+            bool has_gateway = false;
+            for (auto* gateway = adapter->FirstGatewayAddress; gateway; gateway = gateway->Next) {
+                if (!gateway->Address.lpSockaddr || gateway->Address.lpSockaddr->sa_family != AF_INET) continue;
+                auto* ipv4 = reinterpret_cast<sockaddr_in*>(gateway->Address.lpSockaddr);
+                if (ipv4->sin_addr.s_addr != 0) {
+                    has_gateway = true;
+                    break;
+                }
+            }
+            const bool physical = adapter->IfType == IF_TYPE_ETHERNET_CSMACD ||
+                                  adapter->IfType == IF_TYPE_IEEE80211;
+            std::wstring adapter_text;
+            if (adapter->FriendlyName) adapter_text += adapter->FriendlyName;
+            adapter_text += L" ";
+            if (adapter->Description) adapter_text += adapter->Description;
+            std::transform(adapter_text.begin(), adapter_text.end(), adapter_text.begin(),
+                [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
+            const bool virtual_adapter =
+                adapter_text.find(L"virtual") != std::wstring::npos ||
+                adapter_text.find(L"hyper-v") != std::wstring::npos ||
+                adapter_text.find(L"vmware") != std::wstring::npos ||
+                adapter_text.find(L"wsl") != std::wstring::npos ||
+                adapter_text.find(L"vpn") != std::wstring::npos ||
+                adapter_text.find(L"tunnel") != std::wstring::npos ||
+                adapter_text.find(L"tailscale") != std::wstring::npos ||
+                adapter_text.find(L"cloudflare") != std::wstring::npos;
+            for (auto* address = adapter->FirstUnicastAddress; address; address = address->Next) {
+                if (!address->Address.lpSockaddr || address->Address.lpSockaddr->sa_family != AF_INET) continue;
+                auto* ipv4 = reinterpret_cast<sockaddr_in*>(address->Address.lpSockaddr);
+                if (!is_usable_lan_ip(ipv4->sin_addr.s_addr)) continue;
+                char text[INET_ADDRSTRLEN]{};
+                if (!inet_ntop(AF_INET, &ipv4->sin_addr, text, sizeof(text))) continue;
+                // Prefer an active Ethernet/Wi-Fi adapter with a gateway, then its route metric.
+                uint64_t score = static_cast<uint64_t>(adapter->Ipv4Metric);
+                if (!has_gateway) score += 1ULL << 32;
+                if (!physical) score += 1ULL << 33;
+                if (virtual_adapter) score += 1ULL << 34;
+                if (score < best_score) {
+                    best_score = score;
+                    best = text;
+                }
             }
         }
     }
-    closesocket(sock);
-#ifdef _WIN32
     WSACleanup();
+    return best.empty() ? "127.0.0.1" : best;
+#else
+    std::string default_interface;
+    std::ifstream routes("/proc/net/route");
+    std::string line;
+    std::getline(routes, line);
+    while (std::getline(routes, line)) {
+        std::istringstream row(line);
+        std::string interface_name, destination;
+        if (row >> interface_name >> destination && destination == "00000000") {
+            default_interface = interface_name;
+            break;
+        }
+    }
+    ifaddrs* interfaces = nullptr;
+    if (getifaddrs(&interfaces) != 0) return "127.0.0.1";
+    std::string best;
+    for (auto* item = interfaces; item; item = item->ifa_next) {
+        if (!item->ifa_addr || item->ifa_addr->sa_family != AF_INET ||
+            !(item->ifa_flags & IFF_UP) || (item->ifa_flags & IFF_LOOPBACK)) continue;
+        auto* ipv4 = reinterpret_cast<sockaddr_in*>(item->ifa_addr);
+        if (!is_usable_lan_ip(ipv4->sin_addr.s_addr)) continue;
+        char text[INET_ADDRSTRLEN]{};
+        if (!inet_ntop(AF_INET, &ipv4->sin_addr, text, sizeof(text))) continue;
+        if (best.empty()) best = text;
+        if (default_interface == item->ifa_name) {
+            best = text;
+            break;
+        }
+    }
+    freeifaddrs(interfaces);
+    return best.empty() ? "127.0.0.1" : best;
 #endif
-
-    return local_ip;
 }
 
 static std::string generate_token() {
@@ -154,6 +232,8 @@ static bool has_session_cookie(const std::string& cookies) {
 static std::mutex g_console_mutex;
 static std::string g_console_banner;
 static bool g_console_pinned = false;
+static int g_console_rows = 0;   // 0 when the terminal cannot host a pinned panel
+static int g_panel_lines = 0;
 
 #ifdef _WIN32
 static BOOL WINAPI restore_console_on_ctrl(DWORD event) {
@@ -229,6 +309,8 @@ static void show_access_panel(const std::string& network_url, const std::string&
     const int panel_lines = static_cast<int>(std::count(g_console_banner.begin(), g_console_banner.end(), '\n'));
     g_console_pinned = ansi && rows >= panel_lines + 2 && columns >= static_cast<int>(std::max(network_url.size() + 11, local_url.size() + 11))
         && columns >= size + 2;
+    g_panel_lines = panel_lines;
+    g_console_rows = g_console_pinned ? rows : 0;
     if (g_console_pinned) std::cout << "\x1b[2J\x1b[H";
     std::cout << g_console_banner;
     if (g_console_pinned) {
@@ -244,6 +326,70 @@ static void show_access_panel(const std::string& network_url, const std::string&
 #endif
     }
     std::cout << std::flush;
+}
+
+static bool stdin_is_tty() {
+#ifdef _WIN32
+    return _isatty(_fileno(stdin)) != 0;
+#else
+    return isatty(STDIN_FILENO) != 0;
+#endif
+}
+
+static bool stdout_is_tty() {
+#ifdef _WIN32
+    return _isatty(_fileno(stdout)) != 0;
+#else
+    return isatty(STDOUT_FILENO) != 0;
+#endif
+}
+
+// Leave the pinned panel temporarily so the prompt is readable in normal scrollback.
+static void restore_scrollback() {
+    if (g_console_pinned) {
+        g_console_pinned = false;
+        std::cout << "\x1b[r" << std::flush;
+    }
+}
+
+static void reframe_console() {
+    if (g_console_banner.empty()) return;
+    if (g_console_rows) {
+        std::cout << "\x1b[2J\x1b[H" << g_console_banner
+                  << "\x1b[" << (g_panel_lines + 1) << ';' << g_console_rows << 'r'
+                  << "\x1b[" << (g_panel_lines + 1) << ";1H";
+        g_console_pinned = true;
+    } else {
+        std::cout << g_console_banner;
+    }
+    std::cout << std::flush;
+}
+
+// Asks the operator, in the server terminal, whether an unauthenticated client
+// may connect. Only interactive terminals are prompted; anything else (tests,
+// CI, redirected output) is denied immediately so nothing can hang.
+static bool request_manual_approval(const std::string& client_ip) {
+    static std::mutex approval_mutex;
+    std::lock_guard<std::mutex> approval_lock(approval_mutex);
+    if (!stdin_is_tty() || !stdout_is_tty()) {
+        console_log("[approval] " + (client_ip.empty() ? std::string("unknown address") : client_ip) +
+                    " denied (no interactive console for manual approval)");
+        return false;
+    }
+    std::lock_guard<std::mutex> console_lock(g_console_mutex);
+    restore_scrollback();
+    std::cout << "\n[approval] " << (client_ip.empty() ? "unknown address" : client_ip)
+              << " wants to connect. Allow this client? [y/n]: " << std::flush;
+    std::string line;
+    bool ok = false;
+    if (std::getline(std::cin, line)) {
+        for (char& c : line) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        ok = line == "y" || line == "yes";
+    }
+    std::cout << "[approval] " << (client_ip.empty() ? "unknown address" : client_ip)
+              << (ok ? " allowed" : " denied") << '\n';
+    reframe_console();
+    return ok;
 }
 
 static const char* FALLBACK_HTML = R"html(<!DOCTYPE html>
@@ -303,6 +449,30 @@ static std::string json_escape(const std::string& value) {
         else result += static_cast<char>(c);
     }
     return result;
+}
+
+static std::string content_disposition_filename(const std::string& disposition,
+                                                const std::string& filename) {
+    std::string fallback;
+    std::string encoded;
+    const char* hex = "0123456789ABCDEF";
+    for (unsigned char c : filename) {
+        if (c >= 32 && c < 127 && c != '"' && c != '\\') fallback += static_cast<char>(c);
+        else if (c < 128) fallback += '_';
+        else fallback += '_';
+
+        const bool attr_char = std::isalnum(c) || c == '!' || c == '#' || c == '$' ||
+            c == '&' || c == '+' || c == '-' || c == '.' || c == '^' || c == '_' ||
+            c == '`' || c == '|' || c == '~';
+        if (attr_char) encoded += static_cast<char>(c);
+        else {
+            encoded += '%';
+            encoded += hex[c >> 4];
+            encoded += hex[c & 15];
+        }
+    }
+    if (fallback.empty()) fallback = "download";
+    return disposition + "; filename=\"" + fallback + "\"; filename*=UTF-8''" + encoded;
 }
 
 static std::string guess_content_type(const std::string& ext) {
@@ -456,6 +626,90 @@ static http::response<http::string_body> redirect(unsigned version, const std::s
     res.body() = ""; res.prepare_payload(); return res;
 }
 
+// Hands out the session cookie and drops the client onto the entry page,
+// exactly like the tokenized link does.
+static http::response<http::string_body> grant_session(unsigned version) {
+    auto res = redirect(version, "/");
+    res.result(http::status::see_other);
+    res.set(http::field::set_cookie, "LocalPathSession=" + g_session_token + "; Path=/; HttpOnly; SameSite=Lax");
+    res.set("Referrer-Policy", "no-referrer");
+    res.keep_alive(false);
+    return res;
+}
+
+static const char* WAITING_HTML = R"html(<!doctype html>
+<html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LocalPath — очікування дозволу</title><style>
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f5f7fa;color:#1c2939;font:16px system-ui,sans-serif}
+main{width:min(440px,calc(100% - 40px));padding:32px;background:#fff;border:1px solid #e2e7ee;border-radius:16px;text-align:center;box-shadow:0 12px 40px #1c293912}
+.dot{width:12px;height:12px;margin:0 auto 20px;border:3px solid #d9e3fa;border-top-color:#315fdb;border-radius:50%;animation:s 1s linear infinite}
+h1{font-size:22px;margin:0 0 10px}p{color:#536275;line-height:1.55;margin:0}#state{margin-top:18px;font-size:14px}
+@keyframes s{to{transform:rotate(360deg)}}</style></head><body><main>
+<div class="dot" aria-hidden="true"></div><h1>Очікування дозволу</h1>
+<p>Сервер працює. Власник має підтвердити доступ у консолі. Файли до підтвердження недоступні.</p>
+<p id="state">Перевіряємо дозвіл…</p></main><script>
+async function check(){try{const r=await fetch('/api/auth/status',{cache:'no-store'});const j=await r.json();
+if(j.status==='approved'){location.replace('/');return}if(j.status==='denied'){document.querySelector('.dot').style.display='none';state.textContent='Доступ відхилено власником.';return}
+state.textContent='Очікуємо підтвердження…'}catch(e){state.textContent='Сервер тимчасово не відповідає. Повторюємо…'}setTimeout(check,1200)}check();
+</script></body></html>)html";
+
+enum class ApprovalState { pending, approved, denied };
+struct ApprovalEntry {
+    std::string ip;
+    ApprovalState state;
+    std::chrono::steady_clock::time_point updated;
+};
+
+static std::mutex g_approved_mutex;
+static std::vector<ApprovalEntry> g_approved_clients;
+
+static ApprovalState approval_state(const std::string& ip) {
+    if (ip.empty()) return ApprovalState::denied;
+    std::lock_guard<std::mutex> lock(g_approved_mutex);
+    auto now = std::chrono::steady_clock::now();
+    g_approved_clients.erase(std::remove_if(g_approved_clients.begin(), g_approved_clients.end(),
+        [&](const ApprovalEntry& entry) { return now - entry.updated > std::chrono::minutes(5); }),
+        g_approved_clients.end());
+    for (const auto& entry : g_approved_clients) if (entry.ip == ip) return entry.state;
+    return ApprovalState::pending;
+}
+
+static void request_approval_async(const std::string& ip) {
+    if (ip.empty()) return;
+    {
+        std::lock_guard<std::mutex> lock(g_approved_mutex);
+        for (const auto& entry : g_approved_clients) if (entry.ip == ip) return;
+        g_approved_clients.push_back({ip, ApprovalState::pending, std::chrono::steady_clock::now()});
+    }
+    std::thread([ip] {
+        const bool allowed = request_manual_approval(ip);
+        std::lock_guard<std::mutex> lock(g_approved_mutex);
+        for (auto& entry : g_approved_clients) {
+            if (entry.ip == ip) {
+                entry.state = allowed ? ApprovalState::approved : ApprovalState::denied;
+                entry.updated = std::chrono::steady_clock::now();
+                break;
+            }
+        }
+    }).detach();
+}
+
+static std::string remote_ip(tcp::socket& socket) {
+    try { return socket.remote_endpoint().address().to_string(); }
+    catch (const std::exception&) { return {}; }
+}
+
+static http::response<http::string_body> auth_status_response(
+    unsigned version, ApprovalState state) {
+    auto text = state == ApprovalState::approved ? "approved" :
+                state == ApprovalState::denied ? "denied" : "pending";
+    auto res = make_response<http::string_body>(http::status::ok, version,
+        "application/json; charset=utf-8", std::string("{\"status\":\"") + text + "\"}");
+    if (state == ApprovalState::approved)
+        res.set(http::field::set_cookie, "LocalPathSession=" + g_session_token + "; Path=/; HttpOnly; SameSite=Lax");
+    return res;
+}
+
 static void stream_file(tcp::socket&, const fs::path&, unsigned, bool, beast::error_code&);
 
 void do_session(tcp::socket socket) {
@@ -473,22 +727,28 @@ void do_session(tcp::socket socket) {
         // it from the address bar; subsequent requests use an HttpOnly cookie.
         if (method == http::verb::get && target.rfind("/?token=", 0) == 0 &&
             token_equals(target.substr(8))) {
-            auto res = redirect(version, "/");
-            res.result(http::status::see_other);
-            res.set(http::field::set_cookie, "LocalPathSession=" + g_session_token + "; Path=/; HttpOnly; SameSite=Lax");
-            res.set(http::field::cache_control, "no-store");
-            res.set("Referrer-Policy", "no-referrer");
-            res.keep_alive(false);
-            http::write(socket, res, ec);
+            http::write(socket, grant_session(version), ec);
             break;
         }
         if (!has_session_cookie(std::string(parser.get()[http::field::cookie]))) {
-            auto res = make_response<http::string_body>(http::status::unauthorized, version,
-                "text/plain; charset=utf-8", "Access denied. Open the link or scan the QR code shown on the server.");
-            res.set(http::field::cache_control, "no-store");
-            res.keep_alive(false);
-            http::write(socket, res, ec);
-            break;
+            const std::string client_ip = remote_ip(socket);
+            if (method == http::verb::get && target == "/api/auth/status") {
+                http::write(socket, auth_status_response(version, approval_state(client_ip)), ec);
+            } else if (method == http::verb::get &&
+                       (target == "/" || target == "/index.html" || target.rfind("/?token=", 0) == 0)) {
+                request_approval_async(client_ip);
+                auto res = make_response<http::string_body>(http::status::ok, version,
+                    "text/html; charset=utf-8", WAITING_HTML);
+                res.keep_alive(keep_alive);
+                http::write(socket, res, ec);
+            } else {
+                auto res = make_response<http::string_body>(http::status::unauthorized, version,
+                    "application/json; charset=utf-8", "{\"error\":\"authorization_required\"}");
+                res.keep_alive(keep_alive);
+                http::write(socket, res, ec);
+            }
+            if (ec || !keep_alive) break;
+            continue;
         }
         const bool upload = method == http::verb::post && target.rfind("/upload?path=", 0) == 0;
         const auto boundary = upload ? extract_boundary(std::string(parser.get()[http::field::content_type])) : "";
@@ -632,8 +892,12 @@ static void stream_file(tcp::socket& socket, const fs::path& path, unsigned vers
     res.set(http::field::content_type, archive ? "application/x-tar" : guess_content_type(path.extension().string()));
     res.set(http::field::cache_control, "no-store");
     res.set(http::field::x_content_type_options, "nosniff");
-    // A constant filename avoids untrusted characters in HTTP headers.
-    res.set(http::field::content_disposition, archive ? "attachment; filename=archive.tar" : (path.extension() == ".html" ? "attachment" : "inline"));
+    std::string download_name = path.filename().string();
+    if (archive) download_name += ".tar";
+    res.set(http::field::content_disposition,
+        content_disposition_filename(
+            archive || path.extension() == ".html" ? "attachment" : "inline",
+            download_name));
     res.keep_alive(false);
     res.chunked(true);
     http::response_serializer<http::empty_body> serializer{res};

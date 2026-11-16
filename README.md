@@ -14,6 +14,8 @@ Drop files, browse folders, preview media, and download entire directories as `.
 
 - **Zero config** – run the executable, scan the terminal QR code or open the tokenized link
 - **Link-based access** – a fresh random token is generated on each launch; requests without it are denied
+- **Manual approval** – opening the server without the token shows a live waiting page while the
+  server terminal asks `Allow this client? [y/n]`; answering `y` grants the browser a session
 - **Upload files & folders** via drag‑and‑drop or file picker
 - **Nested folder support** – create and navigate directory trees
 - **Inline preview** for images, videos, audio, PDFs, and text files
@@ -91,7 +93,7 @@ On Windows, use the path to your built `LocalPath.exe` instead.
 
 1. **Start the server** from its executable directory – it creates an `uploads/` folder in the current working directory.
 2. **Scan the QR code** in the console or open its full `http://.../?token=...` link. The local link works on the server machine; the network link is for other devices. The URL remains visible above logs on a compatible terminal (otherwise it is reprinted after logs).
-3. **Share the link only with trusted people.** The first visit exchanges the token for an HttpOnly session cookie and removes the token from the address bar. Opening the bare IP/port without a cookie returns HTTP 401.
+3. **Share the link only with trusted people.** The first visit exchanges the token for an HttpOnly session cookie and removes the token from the address bar. Opening the bare IP/port without a cookie keeps the server connection available but shows only an approval page; no file names or file operations are exposed. Meanwhile the interactive server console prints `[approval] <IP> wants to connect. Allow this client? [y/n]`. Answering `y` makes the waiting page enter automatically and grants that browser a session; `n` denies it. When there is no interactive console (for example in CI or with redirected input), approval is denied automatically.
 4. **Upload** – drag files/folders onto the page or click the upload zone.
 5. **Navigate** – click on folder names to enter, use breadcrumbs to go back.
 6. **Preview, download, or delete** files with the buttons beside them.
@@ -113,7 +115,7 @@ On Windows, use the path to your built `LocalPath.exe` instead.
 | `/delete`               | POST   | Deletes a file or folder (body: `file=<rel>`)   |
 
 - `<rel>` – path relative to the `uploads/` directory, URL‑encoded.
-- Every endpoint requires the `LocalPathSession` cookie; open the tokenized URL first to obtain it. A token in an API query string is not accepted.
+- File endpoints require the `LocalPathSession` cookie; open the tokenized URL or receive manual approval first. The unauthenticated `/` page and `/api/auth/status` expose only approval state, never file data. A token in an API query string is not accepted by file endpoints.
 
 ---
 

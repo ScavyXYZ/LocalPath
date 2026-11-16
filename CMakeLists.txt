@@ -7,7 +7,7 @@ target_include_directories(LocalPath PRIVATE LocalPath/boost_min)
 find_package(Threads REQUIRED)
 target_link_libraries(LocalPath PRIVATE Threads::Threads)
 if(WIN32)
-  target_link_libraries(LocalPath PRIVATE ws2_32 bcrypt)
+  target_link_libraries(LocalPath PRIVATE ws2_32 bcrypt iphlpapi)
 endif()
 configure_file(LocalPath/index.html ${CMAKE_CURRENT_BINARY_DIR}/index.html COPYONLY)
 
