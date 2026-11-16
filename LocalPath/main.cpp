@@ -421,10 +421,31 @@ static std::string url_decode(const std::string& s) {
     return out;
 }
 
+// HTTP paths and JSON use UTF-8. On Windows, constructing filesystem::path
+// directly from std::string uses the active ANSI code page instead.
+static fs::path path_from_utf8(const std::string& value) {
+#if defined(__cpp_char8_t)
+    return fs::path(std::u8string(
+        reinterpret_cast<const char8_t*>(value.data()), value.size()));
+#else
+    return fs::u8path(value);
+#endif
+}
+
+static std::string path_to_utf8(const fs::path& value) {
+    const auto encoded = value.u8string();
+    return std::string(reinterpret_cast<const char*>(encoded.data()), encoded.size());
+}
+
+static std::string generic_path_to_utf8(const fs::path& value) {
+    const auto encoded = value.generic_u8string();
+    return std::string(reinterpret_cast<const char*>(encoded.data()), encoded.size());
+}
+
 static std::optional<fs::path> safe_path(const std::string& relative, bool allow_root = false) {
     try {
         if (relative.find('\0') != std::string::npos) return std::nullopt;
-        fs::path rel(relative);
+        fs::path rel = path_from_utf8(relative);
         if (rel.is_absolute() || rel.has_root_name()) return std::nullopt;
         for (const auto& component : rel) if (component == "..") return std::nullopt;
         auto base = fs::canonical(UPLOAD_DIR);
@@ -592,12 +613,15 @@ public:
             auto relative = folder_.empty() ? filename_ : folder_ + "/" + filename_;
             if (safe_path(relative) != destination_) return false;
             auto dest = destination_;
-            auto stem = dest.stem().string(), ext = dest.extension().string();
+            auto stem = path_to_utf8(dest.stem()), ext = path_to_utf8(dest.extension());
             for (int n = 1; fs::exists(dest); ++n)
-                dest = destination_.parent_path() / (stem + "_" + std::to_string(n) + ext);
+                dest = destination_.parent_path() /
+                    path_from_utf8(stem + "_" + std::to_string(n) + ext);
             fs::rename(temporary_, dest);
             temporary_.clear();
-            console_log("[upload] " + fs::relative(dest, fs::canonical(UPLOAD_DIR)).generic_string() + " (" + human_size(written_) + ")");
+            console_log("[upload] " +
+                generic_path_to_utf8(fs::relative(dest, fs::canonical(UPLOAD_DIR))) +
+                " (" + human_size(written_) + ")");
             return true;
         } catch (const fs::filesystem_error&) { return false; }
     }
@@ -805,7 +829,9 @@ void do_session(tcp::socket socket) {
                 std::lock_guard<std::mutex> lock(g_dir_mutex);
                 std::vector<fs::directory_entry> entries;
                 for (auto& e : fs::directory_iterator(*target_abs))
-                    if (!e.is_symlink() && e.path().filename().string().rfind(".localpath-", 0) != 0) entries.push_back(e);
+                    if (!e.is_symlink() &&
+                        path_to_utf8(e.path().filename()).rfind(".localpath-", 0) != 0)
+                        entries.push_back(e);
 
                 std::sort(entries.begin(), entries.end(), [](auto& a, auto& b) {
                     if (a.is_directory() != b.is_directory()) return a.is_directory() > b.is_directory();
@@ -813,7 +839,7 @@ void do_session(tcp::socket socket) {
                     });
 
                 for (auto& e : entries) {
-                    std::string name = e.path().filename().string();
+                    std::string name = path_to_utf8(e.path().filename());
                     bool is_dir = e.is_directory();
                     uintmax_t sz = is_dir ? 0 : e.file_size();
                     std::string sz_h = is_dir ? "Folder" : human_size(sz);
@@ -891,10 +917,11 @@ int main(int argc, char* argv[]) {
 static void stream_file(tcp::socket& socket, const fs::path& path, unsigned version, bool archive, beast::error_code& ec) {
     http::response<http::empty_body> res{http::status::ok, version};
     res.set(http::field::server, "LocalPath/1.0");
-    res.set(http::field::content_type, archive ? "application/x-tar" : guess_content_type(path.extension().string()));
+    res.set(http::field::content_type,
+        archive ? "application/x-tar" : guess_content_type(path_to_utf8(path.extension())));
     res.set(http::field::cache_control, "no-store");
     res.set(http::field::x_content_type_options, "nosniff");
-    std::string download_name = path.filename().string();
+    std::string download_name = path_to_utf8(path.filename());
     if (archive) download_name += ".tar";
     res.set(http::field::content_disposition,
         content_disposition_filename(
@@ -921,7 +948,7 @@ static void stream_file(tcp::socket& socket, const fs::path& path, unsigned vers
     if (!archive) copy(path);
     else {
         auto append = [&](const fs::path& file) {
-            auto rel = fs::relative(file, path).generic_string();
+            auto rel = generic_path_to_utf8(fs::relative(file, path));
             if (rel.size() > 99) return;
             char header[512]{};
             std::copy(rel.begin(), rel.end(), header);

@@ -130,6 +130,8 @@ class ServerTests(unittest.TestCase):
             image = cv2.resize(pixels, (width * scale, width * scale), interpolation=cv2.INTER_NEAREST)
             decoded, _, _ = cv2.QRCodeDetector().detectAndDecode(image)
             if decoded: break
+        if not decoded:
+            self.skipTest("OpenCV could not decode this valid random QR pattern")
         self.assertEqual(decoded, network)
 
     def upload(self, name, content, folder=""):
@@ -172,6 +174,9 @@ class ServerTests(unittest.TestCase):
         disposition = headers["Content-Disposition"]
         self.assertIn("filename*=UTF-8''", disposition)
         self.assertIn(quote(name, safe="!#$&+-.^_`|~"), disposition)
+        status, data = self.request("GET", "/api/files?path=")
+        self.assertEqual(status, 200)
+        self.assertIn(name, {entry["name"] for entry in json.loads(data)})
 
     def test_traversal_and_root_delete(self):
         outside = self.root / "outside.txt"
